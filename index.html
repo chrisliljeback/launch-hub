@@ -19,40 +19,32 @@
   </noscript>
 
   <script>
-  // GitHub persistence layer — token entered by user, stored in browser
   (function() {
     const REPO = 'chrisliljeback/launch-hub';
     const FILE = 'data.json';
     const TOKEN_KEY = '__lh_github_token';
-
-    // Use real localStorage for the token itself (not synced to GitHub)
-    const _realLS = Object.getOwnPropertyDescriptor(window, 'localStorage')
-      ? null  // already overridden in a previous load? use sessionStorage fallback
-      : window.localStorage;
-    
-    function getToken() {
-      try { return _realLS.getItem(TOKEN_KEY) || window._lh_token || null; } catch(e) { return null; }
-    }
-    function setToken(t) {
-      try { _realLS.setItem(TOKEN_KEY, t); window._lh_token = t; } catch(e) {}
-    }
-
-    // Capture real localStorage BEFORE override (for persistent token storage)
     const _realLS = window.localStorage;
+
     window.__ls_store = {};
     window.__github_sha = null;
     let saveTimer = null;
 
-    async function fetchFromGitHub(token) {
+    function getToken() {
+      try { return _realLS.getItem(TOKEN_KEY) || null; } catch(e) { return null; }
+    }
+    function setToken(t) {
+      try { _realLS.setItem(TOKEN_KEY, t); } catch(e) {}
+    }
+
+    async function fetchData(token) {
       try {
         const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
-          headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+          headers: { 'Authorization': 'token ' + token }
         });
         if (r.ok) {
           const d = await r.json();
           window.__github_sha = d.sha;
-          const parsed = JSON.parse(atob(d.content.replace(/\n/g, '')));
-          Object.assign(window.__ls_store, parsed);
+          Object.assign(window.__ls_store, JSON.parse(atob(d.content.replace(/\n/g, ''))));
         }
       } catch(e) {}
     }
@@ -60,10 +52,7 @@
     async function saveToGitHub() {
       const token = getToken();
       if (!token) return;
-      const body = {
-        message: 'Update hub data',
-        content: btoa(unescape(encodeURIComponent(JSON.stringify(window.__ls_store))))
-      };
+      const body = { message: 'Update hub data', content: btoa(unescape(encodeURIComponent(JSON.stringify(window.__ls_store)))) };
       if (window.__github_sha) body.sha = window.__github_sha;
       try {
         const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
@@ -72,7 +61,7 @@
           body: JSON.stringify(body)
         });
         if (r.ok) { const d = await r.json(); window.__github_sha = d.content.sha; }
-      } catch(e) { console.warn('GitHub save failed:', e); }
+      } catch(e) {}
     }
 
     function scheduleSave() {
@@ -80,24 +69,17 @@
       saveTimer = setTimeout(saveToGitHub, 800);
     }
 
-    // Show token setup prompt if no token found
-    function showTokenPrompt() {
+    function showTokenPrompt(resolve) {
       const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:99999;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
-      overlay.innerHTML = `
-        <div style="background:#1a1a1c;border:1px solid #333;border-radius:12px;padding:32px;width:420px;color:#fff">
-          <h2 style="margin:0 0 8px;font-size:18px">GitHub Token</h2>
-          <p style="margin:0 0 20px;color:#888;font-size:14px">Ange ditt GitHub Personal Access Token för att synka data mellan enheter. Tokenet sparas i den här webbläsaren.</p>
-          <input id="__lh_token_input" type="password" placeholder="Klistra in token här" style="width:100%;padding:10px 12px;background:#0d0d0f;border:1px solid #444;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:16px">
-          <button id="__lh_token_save" style="width:100%;padding:10px;background:#82A729;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Spara & ladda data</button>
-          <p id="__lh_token_err" style="color:#ff6b6b;font-size:13px;margin:8px 0 0;display:none"></p>
-        </div>
-      `;
+      overlay.style.cssText = 'position:fixed;inset:0;background:#0d0d0f;display:flex;align-items:center;justify-content:center;z-index:999999;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
+      overlay.innerHTML = '<div style="background:#1a1a1c;border:1px solid #333;border-radius:12px;padding:32px;width:420px;color:#fff;box-shadow:0 20px 60px rgba(0,0,0,0.5)"><img src="logo-green.png" style="height:24px;margin-bottom:24px;display:block"><h2 style="margin:0 0 8px;font-size:18px;font-weight:600">GitHub Token</h2><p style="margin:0 0 20px;color:#888;font-size:14px;line-height:1.5">Ange ditt GitHub Personal Access Token för att synka data mellan enheter. Sparas i den här webbläsaren.</p><input id="__lh_ti" type="password" placeholder="Klistra in token här" style="width:100%;padding:10px 12px;background:#0d0d0f;border:1px solid #444;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:12px;outline:none"><button id="__lh_ts" style="width:100%;padding:11px;background:#82A729;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Fortsätt</button><p id="__lh_te" style="color:#ff6b6b;font-size:13px;margin:10px 0 0;display:none;text-align:center"></p></div>';
       document.body.appendChild(overlay);
-      document.getElementById('__lh_token_save').onclick = async function() {
-        const t = document.getElementById('__lh_token_input').value.trim();
+      document.getElementById('__lh_ti').focus();
+      document.getElementById('__lh_ts').onclick = async function() {
+        const t = document.getElementById('__lh_ti').value.trim();
         if (!t) return;
         this.textContent = 'Ansluter...';
+        this.disabled = true;
         try {
           const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
             headers: { 'Authorization': 'token ' + t }
@@ -107,32 +89,36 @@
             if (r.ok) {
               const d = await r.json();
               window.__github_sha = d.sha;
-              Object.assign(window.__ls_store, JSON.parse(atob(d.content.replace(/\n/g, ''))));
+              try { Object.assign(window.__ls_store, JSON.parse(atob(d.content.replace(/\n/g, '')))); } catch(e) {}
             }
             overlay.remove();
-            location.reload();
+            resolve();
           } else {
-            document.getElementById('__lh_token_err').textContent = 'Ogiltig token. Kontrollera och försök igen.';
-            document.getElementById('__lh_token_err').style.display = 'block';
-            this.textContent = 'Spara & ladda data';
+            document.getElementById('__lh_te').textContent = 'Ogiltig token. Kontrollera och försök igen.';
+            document.getElementById('__lh_te').style.display = 'block';
+            this.textContent = 'Fortsätt'; this.disabled = false;
           }
         } catch(e) {
-          document.getElementById('__lh_token_err').textContent = 'Anslutningsfel. Försök igen.';
-          document.getElementById('__lh_token_err').style.display = 'block';
-          this.textContent = 'Spara & ladda data';
+          document.getElementById('__lh_te').textContent = 'Anslutningsfel. Försök igen.';
+          document.getElementById('__lh_te').style.display = 'block';
+          this.textContent = 'Fortsätt'; this.disabled = false;
         }
       };
+      // Allow Enter key
+      document.getElementById('__lh_ti').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') document.getElementById('__lh_ts').click();
+      });
     }
 
-    // Start data fetch if token exists, otherwise show prompt after app loads
-    const existingToken = getToken();
-    if (existingToken) {
-      window.__dataFetch = fetchFromGitHub(existingToken);
+    const token = getToken();
+    if (token) {
+      window.__dataFetch = fetchData(token);
     } else {
-      window.__dataFetch = Promise.resolve();
-      // Show prompt after DOM is ready
-      document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(showTokenPrompt, 1500);
+      // Block app load until token is provided
+      window.__dataFetch = new Promise(function(resolve) {
+        document.addEventListener('DOMContentLoaded', function() {
+          showTokenPrompt(resolve);
+        });
       });
     }
 
@@ -151,7 +137,7 @@
         },
         configurable: true
       });
-    } catch(e) { console.warn('localStorage override failed:', e); }
+    } catch(e) {}
   })();
   </script>
 </head>
