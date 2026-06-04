@@ -31,12 +31,14 @@
       : window.localStorage;
     
     function getToken() {
-      try { return window.sessionStorage.getItem(TOKEN_KEY) || window._lh_token || null; } catch(e) { return null; }
+      try { return _realLS.getItem(TOKEN_KEY) || window._lh_token || null; } catch(e) { return null; }
     }
     function setToken(t) {
-      try { window.sessionStorage.setItem(TOKEN_KEY, t); window._lh_token = t; } catch(e) {}
+      try { _realLS.setItem(TOKEN_KEY, t); window._lh_token = t; } catch(e) {}
     }
 
+    // Capture real localStorage BEFORE override (for persistent token storage)
+    const _realLS = window.localStorage;
     window.__ls_store = {};
     window.__github_sha = null;
     let saveTimer = null;
