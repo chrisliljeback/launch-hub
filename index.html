@@ -17,6 +17,141 @@
       This page requires JavaScript to display.
     </div>
   </noscript>
+
+  <script>
+  // GitHub persistence layer — token entered by user, stored in browser
+  (function() {
+    const REPO = 'chrisliljeback/launch-hub';
+    const FILE = 'data.json';
+    const TOKEN_KEY = '__lh_github_token';
+
+    // Use real localStorage for the token itself (not synced to GitHub)
+    const _realLS = Object.getOwnPropertyDescriptor(window, 'localStorage')
+      ? null  // already overridden in a previous load? use sessionStorage fallback
+      : window.localStorage;
+    
+    function getToken() {
+      try { return window.sessionStorage.getItem(TOKEN_KEY) || window._lh_token || null; } catch(e) { return null; }
+    }
+    function setToken(t) {
+      try { window.sessionStorage.setItem(TOKEN_KEY, t); window._lh_token = t; } catch(e) {}
+    }
+
+    window.__ls_store = {};
+    window.__github_sha = null;
+    let saveTimer = null;
+
+    async function fetchFromGitHub(token) {
+      try {
+        const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
+          headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+        });
+        if (r.ok) {
+          const d = await r.json();
+          window.__github_sha = d.sha;
+          const parsed = JSON.parse(atob(d.content.replace(/\n/g, '')));
+          Object.assign(window.__ls_store, parsed);
+        }
+      } catch(e) {}
+    }
+
+    async function saveToGitHub() {
+      const token = getToken();
+      if (!token) return;
+      const body = {
+        message: 'Update hub data',
+        content: btoa(unescape(encodeURIComponent(JSON.stringify(window.__ls_store))))
+      };
+      if (window.__github_sha) body.sha = window.__github_sha;
+      try {
+        const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
+          method: 'PUT',
+          headers: { 'Authorization': 'token ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (r.ok) { const d = await r.json(); window.__github_sha = d.content.sha; }
+      } catch(e) { console.warn('GitHub save failed:', e); }
+    }
+
+    function scheduleSave() {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveToGitHub, 800);
+    }
+
+    // Show token setup prompt if no token found
+    function showTokenPrompt() {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:99999;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
+      overlay.innerHTML = `
+        <div style="background:#1a1a1c;border:1px solid #333;border-radius:12px;padding:32px;width:420px;color:#fff">
+          <h2 style="margin:0 0 8px;font-size:18px">GitHub Token</h2>
+          <p style="margin:0 0 20px;color:#888;font-size:14px">Ange ditt GitHub Personal Access Token för att synka data mellan enheter. Tokenet sparas i den här webbläsaren.</p>
+          <input id="__lh_token_input" type="password" placeholder="Klistra in token här" style="width:100%;padding:10px 12px;background:#0d0d0f;border:1px solid #444;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:16px">
+          <button id="__lh_token_save" style="width:100%;padding:10px;background:#82A729;border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Spara & ladda data</button>
+          <p id="__lh_token_err" style="color:#ff6b6b;font-size:13px;margin:8px 0 0;display:none"></p>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      document.getElementById('__lh_token_save').onclick = async function() {
+        const t = document.getElementById('__lh_token_input').value.trim();
+        if (!t) return;
+        this.textContent = 'Ansluter...';
+        try {
+          const r = await fetch('https://api.github.com/repos/' + REPO + '/contents/' + FILE, {
+            headers: { 'Authorization': 'token ' + t }
+          });
+          if (r.ok || r.status === 404) {
+            setToken(t);
+            if (r.ok) {
+              const d = await r.json();
+              window.__github_sha = d.sha;
+              Object.assign(window.__ls_store, JSON.parse(atob(d.content.replace(/\n/g, ''))));
+            }
+            overlay.remove();
+            location.reload();
+          } else {
+            document.getElementById('__lh_token_err').textContent = 'Ogiltig token. Kontrollera och försök igen.';
+            document.getElementById('__lh_token_err').style.display = 'block';
+            this.textContent = 'Spara & ladda data';
+          }
+        } catch(e) {
+          document.getElementById('__lh_token_err').textContent = 'Anslutningsfel. Försök igen.';
+          document.getElementById('__lh_token_err').style.display = 'block';
+          this.textContent = 'Spara & ladda data';
+        }
+      };
+    }
+
+    // Start data fetch if token exists, otherwise show prompt after app loads
+    const existingToken = getToken();
+    if (existingToken) {
+      window.__dataFetch = fetchFromGitHub(existingToken);
+    } else {
+      window.__dataFetch = Promise.resolve();
+      // Show prompt after DOM is ready
+      document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(showTokenPrompt, 1500);
+      });
+    }
+
+    // Override localStorage
+    try {
+      Object.defineProperty(window, 'localStorage', {
+        get: function() {
+          return {
+            getItem: function(k) { return Object.prototype.hasOwnProperty.call(window.__ls_store, k) ? window.__ls_store[k] : null; },
+            setItem: function(k, v) { window.__ls_store[k] = String(v); scheduleSave(); },
+            removeItem: function(k) { delete window.__ls_store[k]; scheduleSave(); },
+            clear: function() { window.__ls_store = {}; scheduleSave(); },
+            key: function(i) { return Object.keys(window.__ls_store)[i] ?? null; },
+            get length() { return Object.keys(window.__ls_store).length; }
+          };
+        },
+        configurable: true
+      });
+    } catch(e) { console.warn('localStorage override failed:', e); }
+  })();
+  </script>
 </head>
 <body>
   <div id="__bundler_thumbnail">
@@ -37,6 +172,8 @@
   <script>
     
 document.addEventListener('DOMContentLoaded', async function() {
+  // Wait for GitHub data to load before initializing app
+  await (window.__dataFetch || Promise.resolve());
   const loading = document.getElementById('__bundler_loading');
   function setStatus(msg) { if (loading) loading.textContent = msg; }
 
